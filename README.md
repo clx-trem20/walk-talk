@@ -1,9 +1,8 @@
-<!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Walkie-Talkie Online</title>
+    <title>Walkie-Talkie Online Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -87,7 +86,7 @@
         
         <div class="flex justify-between items-center mb-6">
             <div class="flex flex-col">
-                <span class="text-zinc-500 text-xs font-bold tracking-widest uppercase">Modelo RX-2026</span>
+                <span class="text-zinc-500 text-xs font-bold tracking-widest uppercase">Modelo RX-2026 CLOUD</span>
                 <h1 class="text-2xl font-black italic tracking-tighter text-white">WALKIE-TALKIE</h1>
             </div>
             <div id="status-led" class="w-3 h-3 rounded-full bg-zinc-700"></div>
@@ -95,22 +94,22 @@
 
         <div id="display-container" class="lcd-display rounded-xl p-4 mb-8 h-32 flex flex-col justify-between relative">
             <div class="flex justify-between text-[10px] font-bold uppercase opacity-70">
-                <span>Canal Ativo</span>
-                <span id="signal-strength">Sinal: ---</span>
+                <span>Canal</span>
+                <span id="signal-strength">Usuários: 0</span>
             </div>
             
             <div id="lcd-status" class="flex flex-col items-center justify-center flex-grow">
-                <span id="channel-name-display" class="text-xl font-bold">---</span>
-                <span id="transmission-status" class="text-xs mt-1 italic tracking-widest">OFFLINE</span>
+                <span id="channel-name-display" class="text-xl font-bold italic tracking-wider">OFFLINE</span>
+                <span id="transmission-status" class="text-xs mt-1 italic tracking-widest uppercase">Aguardando</span>
             </div>
 
             <div class="flex justify-between items-end">
                 <div class="flex gap-1">
-                    <div class="w-1 h-3 bg-zinc-800 opacity-20"></div>
-                    <div class="w-1 h-3 bg-zinc-800 opacity-20"></div>
-                    <div class="w-1 h-3 bg-zinc-800"></div>
+                    <div id="sig-1" class="w-1 h-3 bg-zinc-800 opacity-20"></div>
+                    <div id="sig-2" class="w-1 h-3 bg-zinc-800 opacity-20"></div>
+                    <div id="sig-3" class="w-1 h-3 bg-zinc-800 opacity-20"></div>
                 </div>
-                <span class="text-[10px] font-bold">FREQ: 446.0 MHz</span>
+                <span id="user-id-display" class="text-[8px] font-bold opacity-50">ID: ----</span>
             </div>
         </div>
 
@@ -123,10 +122,10 @@
                 <label class="block text-xs font-bold text-zinc-500 mb-1 uppercase">Senha do Canal</label>
                 <input type="password" id="password-input" placeholder="Senha secreta" class="w-full bg-zinc-800 border-2 border-zinc-700 rounded-lg p-3 text-white focus:outline-none focus:border-blue-500">
             </div>
-            <button onclick="connectChannel()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg transition-transform active:scale-95">
+            <button id="connect-btn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg transition-transform active:scale-95">
                 SINTONIZAR CANAL
             </button>
-            <p class="text-[10px] text-zinc-600 text-center italic mt-2">Certifique-se que seus companheiros usem a mesma senha.</p>
+            <p class="text-[10px] text-zinc-600 text-center italic mt-2">A voz só é enviada enquanto o botão estiver pressionado.</p>
         </div>
 
         <div id="radio-view" class="hidden flex flex-col items-center space-y-8 py-4">
@@ -136,14 +135,14 @@
             
             <div class="text-center">
                 <p class="text-zinc-400 font-semibold mb-2">SEGURE PARA FALAR</p>
-                <button onclick="disconnect()" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold rounded-full border border-zinc-700 uppercase">
-                    Sair do Canal
+                <button onclick="window.location.reload()" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold rounded-full border border-zinc-700 uppercase">
+                    Desconectar
                 </button>
             </div>
 
             <div class="w-full px-4">
                 <div class="flex justify-between text-[10px] text-zinc-500 font-bold mb-1 uppercase">
-                    <span>Volume de Recebimento</span>
+                    <span>Sensibilidade do Mic</span>
                     <span id="vol-label">80%</span>
                 </div>
                 <input type="range" id="volume-slider" min="0" max="100" value="80" class="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600">
@@ -157,152 +156,223 @@
         </div>
     </div>
 
-    <script>
-        let isConnected = false;
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, query } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'walkie-talkie-default';
+
+        let localStream = null;
+        let peerConnections = {};
+        let userId = null;
         let isTalking = false;
         let audioCtx = null;
         
+        let usersCollectionRef = null;
+        let signalsCollectionRef = null;
+
+        const pttBtn = document.getElementById('ptt-btn');
         const setupView = document.getElementById('setup-view');
         const radioView = document.getElementById('radio-view');
         const lcdStatus = document.getElementById('transmission-status');
         const channelDisplay = document.getElementById('channel-name-display');
         const displayBox = document.getElementById('display-container');
         const led = document.getElementById('status-led');
-        const pttBtn = document.getElementById('ptt-btn');
-        const volSlider = document.getElementById('volume-slider');
-        const volLabel = document.getElementById('vol-label');
+        const userDisplay = document.getElementById('user-id-display');
 
-        // Inicializa o contexto de áudio apenas após interação do usuário
-        function initAudio() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-        }
+        const configuration = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
 
-        // Função para gerar sons de rádio sinteticamente (resolve o erro de fontes externas)
-        function playRadioTone(type) {
-            if (!audioCtx) return;
-            
+        function playTone(type) {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
-            
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            
-            if (type === 'start') {
-                // Som de início (agudo curto)
-                osc.type = 'sine';
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            if(type === 'start') {
                 osc.frequency.setValueAtTime(880, audioCtx.currentTime);
                 gain.gain.setValueAtTime(0, audioCtx.currentTime);
                 gain.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.05);
-                gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
-                osc.start();
-                osc.stop(audioCtx.currentTime + 0.2);
-            } else if (type === 'end') {
-                // Som de fim "Roger Beep" (dois tons)
-                osc.type = 'sine';
+                osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+            } else {
                 osc.frequency.setValueAtTime(1000, audioCtx.currentTime);
-                osc.frequency.setValueAtTime(800, audioCtx.currentTime + 0.1);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.2);
                 gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
                 gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
-                osc.start();
-                osc.stop(audioCtx.currentTime + 0.2);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.2);
             }
         }
 
-        function connectChannel() {
-            const channel = document.getElementById('channel-input').value.trim();
-            const pass = document.getElementById('password-input').value.trim();
+        async function connectChannel() {
+            const channelName = document.getElementById('channel-input').value.trim();
+            const password = document.getElementById('password-input').value.trim();
 
-            if (!channel || !pass) {
-                updateLCD("ERRO: DADOS VAZIOS");
-                return;
+            if (!channelName || !password) return;
+
+            // REGRA 3: Autenticação antes de qualquer query
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+                await signInAnonymously(auth);
             }
 
-            initAudio();
+            onAuthStateChanged(auth, async (user) => {
+                if (!user) return;
+                
+                userId = user.uid;
+                userDisplay.innerText = `ID: ${userId.substring(0,6)}`;
+
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    localStream.getAudioTracks()[0].enabled = false;
+                } catch (e) {
+                    console.error("Erro ao acessar mic:", e);
+                    return;
+                }
+
+                // REGRA 1: Caminhos restritos /artifacts/{appId}/public/data/{collectionName}
+                // Usamos o ID do canal como parte do nome da coleção para isolar os dados
+                const safeChannelId = btoa(`${channelName}_${password}`).replace(/[/+=]/g, '');
+                
+                usersCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `users_${safeChannelId}`);
+                signalsCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `signals_${safeChannelId}`);
+
+                setupView.classList.add('hidden');
+                radioView.classList.remove('hidden');
+                channelDisplay.innerText = channelName.toUpperCase();
+                lcdStatus.innerText = "CONECTADO";
+                led.classList.replace('bg-zinc-700', 'bg-green-500');
+
+                // Registrar presença
+                await setDoc(doc(usersCollectionRef, userId), {
+                    id: userId,
+                    joinedAt: Date.now()
+                });
+
+                // Ouvir outros usuários
+                onSnapshot(usersCollectionRef, (snapshot) => {
+                    document.getElementById('signal-strength').innerText = `Usuários: ${snapshot.size}`;
+                    snapshot.docChanges().forEach(async (change) => {
+                        if (change.type === 'added' && change.doc.id !== userId) {
+                            createPeerConnection(change.doc.id, true);
+                        }
+                    });
+                }, (err) => console.error("Erro no snapshot de usuários:", err));
+
+                // Ouvir mensagens direcionadas (Filtramos no JS conforme REGRA 2)
+                onSnapshot(signalsCollectionRef, (snapshot) => {
+                    snapshot.docChanges().forEach(async (change) => {
+                        if (change.type === 'added') {
+                            const data = change.doc.data();
+                            
+                            // Apenas processa se for para este usuário
+                            if (data.to === userId) {
+                                const fromId = data.from;
+                                
+                                if (!peerConnections[fromId]) createPeerConnection(fromId, false);
+                                const pc = peerConnections[fromId];
+
+                                try {
+                                    if (data.type === 'offer') {
+                                        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                                        const answer = await pc.createAnswer();
+                                        await pc.setLocalDescription(answer);
+                                        await addDoc(signalsCollectionRef, {
+                                            type: 'answer', from: userId, to: fromId, answer: answer
+                                        });
+                                    } else if (data.type === 'answer') {
+                                        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                                    } else if (data.type === 'ice') {
+                                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                                    }
+                                } catch (e) {
+                                    console.error("Erro no sinal:", e);
+                                }
+                                await deleteDoc(change.doc.ref);
+                            }
+                        }
+                    });
+                }, (err) => console.error("Erro no snapshot de sinais:", err));
+            });
+        }
+
+        function createPeerConnection(remoteId, isOfferer) {
+            if (peerConnections[remoteId]) return;
             
-            setupView.classList.add('hidden');
-            radioView.classList.remove('hidden');
-            
-            channelDisplay.innerText = "CH: " + channel.toUpperCase();
-            lcdStatus.innerText = "SINTONIZADO / STANDBY";
-            document.getElementById('signal-strength').innerText = "Sinal: FORTE";
-            led.classList.replace('bg-zinc-700', 'bg-green-500');
-            led.classList.add('shadow-[0_0_10px_#22c55e]');
-            
-            isConnected = true;
-            
-            navigator.mediaDevices.getUserMedia({ audio: true })
-                .catch(() => updateLCD("SEM MIC"));
+            const pc = new RTCPeerConnection(configuration);
+            peerConnections[remoteId] = pc;
+
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    addDoc(signalsCollectionRef, {
+                        type: 'ice', from: userId, to: remoteId, candidate: event.candidate.toJSON()
+                    });
+                }
+            };
+
+            pc.ontrack = (event) => {
+                const remoteAudio = new Audio();
+                remoteAudio.srcObject = event.streams[0];
+                remoteAudio.play().catch(e => console.error("Erro áudio remoto:", e));
+            };
+
+            if (isOfferer) {
+                pc.onnegotiationneeded = async () => {
+                    try {
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        await addDoc(signalsCollectionRef, {
+                            type: 'offer', from: userId, to: remoteId, offer: offer
+                        });
+                    } catch (e) {
+                        console.error("Erro negociação:", e);
+                    }
+                };
+            }
         }
 
         function startTalking() {
-            if (!isConnected || isTalking) return;
-            initAudio();
-            
+            if (!userId || isTalking) return;
             isTalking = true;
+            playTone('start');
+            if (localStream) localStream.getAudioTracks()[0].enabled = true;
             pttBtn.classList.add('active');
             displayBox.classList.add('transmitting');
             lcdStatus.innerText = "TRANSMITINDO...";
             led.classList.replace('bg-green-500', 'bg-red-500');
-            led.classList.replace('shadow-[0_0_10px_#22c55e]', 'shadow-[0_0_10px_#ef4444]');
-            
-            playRadioTone('start');
         }
 
         function stopTalking() {
             if (!isTalking) return;
-            
             isTalking = false;
+            playTone('end');
+            if (localStream) localStream.getAudioTracks()[0].enabled = false;
             pttBtn.classList.remove('active');
             displayBox.classList.remove('transmitting');
             lcdStatus.innerText = "STANDBY";
             led.classList.replace('bg-red-500', 'bg-green-500');
-            led.classList.replace('shadow-[0_0_10px_#ef4444]', 'shadow-[0_0_10px_#22c55e]');
-            
-            playRadioTone('end');
         }
 
-        function disconnect() {
-            isConnected = false;
-            radioView.classList.add('hidden');
-            setupView.classList.remove('hidden');
-            channelDisplay.innerText = "---";
-            lcdStatus.innerText = "OFFLINE";
-            displayBox.classList.remove('transmitting');
-            document.getElementById('signal-strength').innerText = "Sinal: ---";
-            led.classList.remove('bg-green-500', 'bg-red-500', 'shadow-[0_0_10px_#22c55e]', 'shadow-[0_0_10px_#ef4444]');
-            led.classList.add('bg-zinc-700');
-        }
-
-        function updateLCD(msg) {
-            const current = lcdStatus.innerText;
-            lcdStatus.innerText = msg;
-            setTimeout(() => {
-                if (isConnected) lcdStatus.innerText = "STANDBY";
-            }, 2000);
-        }
-
-        volSlider.addEventListener('input', (e) => {
-            volLabel.innerText = e.target.value + "%";
-        });
-
-        // Eventos de Mouse
+        document.getElementById('connect-btn').onclick = connectChannel;
         pttBtn.addEventListener('mousedown', startTalking);
         window.addEventListener('mouseup', stopTalking);
-
-        // Eventos de Touch (Mobile)
-        pttBtn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            startTalking();
-        });
-        pttBtn.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            stopTalking();
-        });
-
-        // Bloquear menu de contexto
+        pttBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); });
+        pttBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); });
         pttBtn.addEventListener('contextmenu', e => e.preventDefault());
+
+        window.onbeforeunload = () => {
+            if (userId && usersCollectionRef) {
+                deleteDoc(doc(usersCollectionRef, userId));
+            }
+        };
     </script>
 </body>
 </html>
