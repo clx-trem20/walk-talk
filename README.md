@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
@@ -101,7 +100,7 @@
             
             <div id="lcd-status" class="flex flex-col items-center justify-center flex-grow text-center px-2">
                 <span id="channel-name-display" class="text-xl font-bold italic tracking-wider">OFFLINE</span>
-                <span id="transmission-status" class="text-[10px] mt-1 italic tracking-widest uppercase">Aguardando entrada</span>
+                <span id="transmission-status" class="text-[10px] mt-1 italic tracking-widest uppercase">Pronto para Sintonizar</span>
             </div>
 
             <div class="flex justify-between items-end">
@@ -126,7 +125,7 @@
             <button id="connect-btn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg transition-transform active:scale-95">
                 SINTONIZAR CANAL
             </button>
-            <p class="text-[10px] text-zinc-600 text-center italic mt-2">Permita o uso do microfone para conectar.</p>
+            <p class="text-[10px] text-zinc-600 text-center italic mt-2">Pressione o botão para conectar ao servidor.</p>
         </div>
 
         <div id="radio-view" class="hidden flex flex-col items-center space-y-8 py-4">
@@ -194,6 +193,8 @@
         function playTone(type) {
             try {
                 if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
                 osc.connect(gain); gain.connect(audioCtx.destination);
@@ -217,83 +218,81 @@
             const password = document.getElementById('password-input').value.trim();
 
             if (!channelName || !password) {
-                lcdStatus.innerText = "ERRO: DADOS INVÁLIDOS";
+                lcdStatus.innerText = "ERRO: PREENCHA OS CAMPOS";
                 return;
             }
 
-            lcdStatus.innerText = "INICIANDO MIC...";
+            const connectBtn = document.getElementById('connect-btn');
+            connectBtn.disabled = true;
+            connectBtn.innerText = "CONECTANDO...";
+            lcdStatus.innerText = "ACESSANDO SERVIDOR...";
 
             try {
-                // Passo 1: Solicitar Mic antes de tudo
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                localStream.getAudioTracks()[0].enabled = false;
-                
-                lcdStatus.innerText = "AUTENTICANDO...";
-
-                // Passo 2: Autenticação
+                // Passo 1: Autenticação primeiro (Mais rápido)
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
                 }
 
-                // Esperar pelo ID do usuário
-                const user = await new Promise((resolve) => {
-                    const unsubscribe = onAuthStateChanged(auth, (u) => {
-                        if (u) {
-                            unsubscribe();
-                            resolve(u);
-                        }
-                    });
+                // Passo 2: Pegar Microfone
+                lcdStatus.innerText = "PEDINDO MICROFONE...";
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                localStream.getAudioTracks()[0].enabled = false;
+
+                // Passo 3: Aguardar estado de Auth estar pronto
+                onAuthStateChanged(auth, async (user) => {
+                    if (user && !userId) {
+                        userId = user.uid;
+                        userDisplay.innerText = `ID: ${userId.substring(0,6)}`;
+
+                        // Passo 4: Configurar coleções
+                        const safeChannelId = btoa(`${channelName}_${password}`).replace(/[/+=]/g, '').substring(0, 15);
+                        usersCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `users_${safeChannelId}`);
+                        signalsCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `signals_${safeChannelId}`);
+
+                        // Registrar Presença
+                        await setDoc(doc(usersCollectionRef, userId), {
+                            id: userId,
+                            lastSeen: Date.now()
+                        });
+
+                        // Entrar no Radio
+                        setupView.classList.add('hidden');
+                        radioView.classList.remove('hidden');
+                        channelDisplay.innerText = channelName.toUpperCase();
+                        lcdStatus.innerText = "ONLINE / STANDBY";
+                        led.classList.replace('bg-zinc-700', 'bg-green-500');
+
+                        initFirestoreListeners();
+                        playTone('start');
+                    }
                 });
-
-                userId = user.uid;
-                userDisplay.innerText = `ID: ${userId.substring(0,6)}`;
-
-                // Passo 3: Configurar coleções (Estrutura obrigatória para permissões)
-                const safeChannelId = btoa(`${channelName}_${password}`).replace(/[/+=]/g, '').substring(0, 20);
-                
-                usersCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `users_${safeChannelId}`);
-                signalsCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `signals_${safeChannelId}`);
-
-                // Mudar UI
-                setupView.classList.add('hidden');
-                radioView.classList.remove('hidden');
-                channelDisplay.innerText = channelName.toUpperCase();
-                lcdStatus.innerText = "CANAL ATIVO";
-                led.classList.replace('bg-zinc-700', 'bg-green-500');
-
-                // Registrar presença
-                await setDoc(doc(usersCollectionRef, userId), {
-                    id: userId,
-                    lastSeen: Date.now()
-                });
-
-                // Iniciar escutas
-                initFirestoreListeners();
 
             } catch (e) {
-                console.error("Erro na conexão:", e);
-                lcdStatus.innerText = "ERRO NA PERMISSÃO";
+                console.error(e);
+                connectBtn.disabled = false;
+                connectBtn.innerText = "SINTONIZAR CANAL";
+                lcdStatus.innerText = "FALHA: VERIFIQUE O MIC";
             }
         }
 
         function initFirestoreListeners() {
-            // Ouvir outros usuários
+            // Monitorar usuários
             onSnapshot(usersCollectionRef, (snapshot) => {
                 document.getElementById('signal-strength').innerText = `Usuários: ${snapshot.size}`;
-                snapshot.docChanges().forEach(async (change) => {
+                snapshot.docChanges().forEach((change) => {
                     if (change.type === 'added' && change.doc.id !== userId) {
                         createPeerConnection(change.doc.id, true);
                     }
                 });
             }, (err) => {
-                lcdStatus.innerText = "ERRO DE REDE";
+                lcdStatus.innerText = "ERRO DE CONEXÃO";
             });
 
-            // Ouvir mensagens direcionadas (Sinalização WebRTC)
+            // Monitorar Sinais WebRTC
             onSnapshot(signalsCollectionRef, (snapshot) => {
-                snapshot.docChanges().forEach(async (change) => {
+                snapshot.docChanges().forEach((change) => {
                     if (change.type === 'added') {
                         const data = change.doc.data();
                         if (data.to === userId) {
@@ -385,12 +384,10 @@
 
         document.getElementById('connect-btn').onclick = connectChannel;
         
-        // PTT Eventos
         pttBtn.addEventListener('mousedown', startTalking);
         window.addEventListener('mouseup', stopTalking);
         pttBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); }, {passive: false});
         pttBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); }, {passive: false});
-        pttBtn.addEventListener('contextmenu', e => e.preventDefault());
 
         window.onbeforeunload = () => {
             if (userId && usersCollectionRef) {
