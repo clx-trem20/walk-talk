@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
@@ -98,9 +99,9 @@
                 <span id="signal-strength">Usuários: 0</span>
             </div>
             
-            <div id="lcd-status" class="flex flex-col items-center justify-center flex-grow">
+            <div id="lcd-status" class="flex flex-col items-center justify-center flex-grow text-center px-2">
                 <span id="channel-name-display" class="text-xl font-bold italic tracking-wider">OFFLINE</span>
-                <span id="transmission-status" class="text-xs mt-1 italic tracking-widest uppercase">Aguardando</span>
+                <span id="transmission-status" class="text-[10px] mt-1 italic tracking-widest uppercase">Aguardando entrada</span>
             </div>
 
             <div class="flex justify-between items-end">
@@ -125,7 +126,7 @@
             <button id="connect-btn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg transition-transform active:scale-95">
                 SINTONIZAR CANAL
             </button>
-            <p class="text-[10px] text-zinc-600 text-center italic mt-2">A voz só é enviada enquanto o botão estiver pressionado.</p>
+            <p class="text-[10px] text-zinc-600 text-center italic mt-2">Permita o uso do microfone para conectar.</p>
         </div>
 
         <div id="radio-view" class="hidden flex flex-col items-center space-y-8 py-4">
@@ -142,7 +143,7 @@
 
             <div class="w-full px-4">
                 <div class="flex justify-between text-[10px] text-zinc-500 font-bold mb-1 uppercase">
-                    <span>Sensibilidade do Mic</span>
+                    <span>Ganho de Áudio</span>
                     <span id="vol-label">80%</span>
                 </div>
                 <input type="range" id="volume-slider" min="0" max="100" value="80" class="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600">
@@ -191,115 +192,138 @@
         };
 
         function playTone(type) {
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.connect(gain); gain.connect(audioCtx.destination);
-            if(type === 'start') {
-                osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-                gain.gain.setValueAtTime(0, audioCtx.currentTime);
-                gain.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.05);
-                osc.start(); osc.stop(audioCtx.currentTime + 0.15);
-            } else {
-                osc.frequency.setValueAtTime(1000, audioCtx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.2);
-                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-                gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
-                osc.start(); osc.stop(audioCtx.currentTime + 0.2);
-            }
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain); gain.connect(audioCtx.destination);
+                if(type === 'start') {
+                    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0, audioCtx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.05);
+                    osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+                } else {
+                    osc.frequency.setValueAtTime(1000, audioCtx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.2);
+                    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+                    osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+                }
+            } catch(e) {}
         }
 
         async function connectChannel() {
             const channelName = document.getElementById('channel-input').value.trim();
             const password = document.getElementById('password-input').value.trim();
 
-            if (!channelName || !password) return;
-
-            // REGRA 3: Autenticação antes de qualquer query
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
+            if (!channelName || !password) {
+                lcdStatus.innerText = "ERRO: DADOS INVÁLIDOS";
+                return;
             }
 
-            onAuthStateChanged(auth, async (user) => {
-                if (!user) return;
+            lcdStatus.innerText = "INICIANDO MIC...";
+
+            try {
+                // Passo 1: Solicitar Mic antes de tudo
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                localStream.getAudioTracks()[0].enabled = false;
                 
+                lcdStatus.innerText = "AUTENTICANDO...";
+
+                // Passo 2: Autenticação
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Esperar pelo ID do usuário
+                const user = await new Promise((resolve) => {
+                    const unsubscribe = onAuthStateChanged(auth, (u) => {
+                        if (u) {
+                            unsubscribe();
+                            resolve(u);
+                        }
+                    });
+                });
+
                 userId = user.uid;
                 userDisplay.innerText = `ID: ${userId.substring(0,6)}`;
 
-                try {
-                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    localStream.getAudioTracks()[0].enabled = false;
-                } catch (e) {
-                    console.error("Erro ao acessar mic:", e);
-                    return;
-                }
-
-                // REGRA 1: Caminhos restritos /artifacts/{appId}/public/data/{collectionName}
-                // Usamos o ID do canal como parte do nome da coleção para isolar os dados
-                const safeChannelId = btoa(`${channelName}_${password}`).replace(/[/+=]/g, '');
+                // Passo 3: Configurar coleções (Estrutura obrigatória para permissões)
+                const safeChannelId = btoa(`${channelName}_${password}`).replace(/[/+=]/g, '').substring(0, 20);
                 
                 usersCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `users_${safeChannelId}`);
                 signalsCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', `signals_${safeChannelId}`);
 
+                // Mudar UI
                 setupView.classList.add('hidden');
                 radioView.classList.remove('hidden');
                 channelDisplay.innerText = channelName.toUpperCase();
-                lcdStatus.innerText = "CONECTADO";
+                lcdStatus.innerText = "CANAL ATIVO";
                 led.classList.replace('bg-zinc-700', 'bg-green-500');
 
                 // Registrar presença
                 await setDoc(doc(usersCollectionRef, userId), {
                     id: userId,
-                    joinedAt: Date.now()
+                    lastSeen: Date.now()
                 });
 
-                // Ouvir outros usuários
-                onSnapshot(usersCollectionRef, (snapshot) => {
-                    document.getElementById('signal-strength').innerText = `Usuários: ${snapshot.size}`;
-                    snapshot.docChanges().forEach(async (change) => {
-                        if (change.type === 'added' && change.doc.id !== userId) {
-                            createPeerConnection(change.doc.id, true);
-                        }
-                    });
-                }, (err) => console.error("Erro no snapshot de usuários:", err));
+                // Iniciar escutas
+                initFirestoreListeners();
 
-                // Ouvir mensagens direcionadas (Filtramos no JS conforme REGRA 2)
-                onSnapshot(signalsCollectionRef, (snapshot) => {
-                    snapshot.docChanges().forEach(async (change) => {
-                        if (change.type === 'added') {
-                            const data = change.doc.data();
-                            
-                            // Apenas processa se for para este usuário
-                            if (data.to === userId) {
-                                const fromId = data.from;
-                                
-                                if (!peerConnections[fromId]) createPeerConnection(fromId, false);
-                                const pc = peerConnections[fromId];
+            } catch (e) {
+                console.error("Erro na conexão:", e);
+                lcdStatus.innerText = "ERRO NA PERMISSÃO";
+            }
+        }
 
-                                try {
-                                    if (data.type === 'offer') {
-                                        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-                                        const answer = await pc.createAnswer();
-                                        await pc.setLocalDescription(answer);
-                                        await addDoc(signalsCollectionRef, {
-                                            type: 'answer', from: userId, to: fromId, answer: answer
-                                        });
-                                    } else if (data.type === 'answer') {
-                                        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-                                    } else if (data.type === 'ice') {
-                                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-                                    }
-                                } catch (e) {
-                                    console.error("Erro no sinal:", e);
-                                }
-                                await deleteDoc(change.doc.ref);
-                            }
-                        }
-                    });
-                }, (err) => console.error("Erro no snapshot de sinais:", err));
+        function initFirestoreListeners() {
+            // Ouvir outros usuários
+            onSnapshot(usersCollectionRef, (snapshot) => {
+                document.getElementById('signal-strength').innerText = `Usuários: ${snapshot.size}`;
+                snapshot.docChanges().forEach(async (change) => {
+                    if (change.type === 'added' && change.doc.id !== userId) {
+                        createPeerConnection(change.doc.id, true);
+                    }
+                });
+            }, (err) => {
+                lcdStatus.innerText = "ERRO DE REDE";
             });
+
+            // Ouvir mensagens direcionadas (Sinalização WebRTC)
+            onSnapshot(signalsCollectionRef, (snapshot) => {
+                snapshot.docChanges().forEach(async (change) => {
+                    if (change.type === 'added') {
+                        const data = change.doc.data();
+                        if (data.to === userId) {
+                            handleSignal(data, change.doc.ref);
+                        }
+                    }
+                });
+            });
+        }
+
+        async function handleSignal(data, docRef) {
+            const fromId = data.from;
+            if (!peerConnections[fromId]) createPeerConnection(fromId, false);
+            const pc = peerConnections[fromId];
+
+            try {
+                if (data.type === 'offer') {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    await addDoc(signalsCollectionRef, {
+                        type: 'answer', from: userId, to: fromId, answer: answer
+                    });
+                } else if (data.type === 'answer') {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                } else if (data.type === 'ice') {
+                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                }
+            } catch (e) {}
+            await deleteDoc(docRef);
         }
 
         function createPeerConnection(remoteId, isOfferer) {
@@ -321,7 +345,7 @@
             pc.ontrack = (event) => {
                 const remoteAudio = new Audio();
                 remoteAudio.srcObject = event.streams[0];
-                remoteAudio.play().catch(e => console.error("Erro áudio remoto:", e));
+                remoteAudio.play().catch(() => {});
             };
 
             if (isOfferer) {
@@ -332,9 +356,7 @@
                         await addDoc(signalsCollectionRef, {
                             type: 'offer', from: userId, to: remoteId, offer: offer
                         });
-                    } catch (e) {
-                        console.error("Erro negociação:", e);
-                    }
+                    } catch (e) {}
                 };
             }
         }
@@ -357,15 +379,17 @@
             if (localStream) localStream.getAudioTracks()[0].enabled = false;
             pttBtn.classList.remove('active');
             displayBox.classList.remove('transmitting');
-            lcdStatus.innerText = "STANDBY";
+            lcdStatus.innerText = "STANDBY / RECEBENDO";
             led.classList.replace('bg-red-500', 'bg-green-500');
         }
 
         document.getElementById('connect-btn').onclick = connectChannel;
+        
+        // PTT Eventos
         pttBtn.addEventListener('mousedown', startTalking);
         window.addEventListener('mouseup', stopTalking);
-        pttBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); });
-        pttBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); });
+        pttBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); }, {passive: false});
+        pttBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); }, {passive: false});
         pttBtn.addEventListener('contextmenu', e => e.preventDefault());
 
         window.onbeforeunload = () => {
